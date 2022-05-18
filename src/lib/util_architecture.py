@@ -38,7 +38,7 @@ class Confusion_GSL(nn.Module):
                 outputs = self.forward(G)
                 P = F.softmax(outputs, dim = 1)
                 P_max, preds = P.max(dim = 1)
-                A_star = torch.matmul(P, P.T)
+                A_star_section_2 = torch.matmul(P[G.train_mask, :], P[~G.train_mask].T)
                 loss = criterion(outputs[G.train_mask], G.y[G.train_mask]) 
                 optimizer.zero_grad()
                 loss.backward()
@@ -51,7 +51,7 @@ class Confusion_GSL(nn.Module):
                 if accuracy > self.max_accuracy:
                     self.max_accuracy = accuracy
                 scheduler.step()
-        return A_star
+        return A_star_section_2
 
     def visualize(self, G, num_hops = 1):
         self.eval()
