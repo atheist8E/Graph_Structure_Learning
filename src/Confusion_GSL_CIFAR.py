@@ -8,12 +8,13 @@ import torch.nn as nn
 from datetime import datetime
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
-from torch_geometric.datasets import Planetoid
 from torch_geometric.seed import seed_everything
+from torch.utils.data.dataset import random_split
 from torch.utils.tensorboard import SummaryWriter
 
 from lib.util_loss import *
 from lib.util_dataset import *
+from lib.util_visualize import *
 from lib.util_transform import *
 from lib.util_architecture import *
 
@@ -23,7 +24,7 @@ def set_args():
     parser.add_argument("--source_file",        type = str,        default = "")
     parser.add_argument("--target_path",        type = str,        default = "../log/")
     parser.add_argument("--target_file",        type = str,        default = "")
-    parser.add_argument("--dataset",       	    type = str,        default = "CiteSeer")
+    parser.add_argument("--dataset",       	    type = str,        default = "CIFAR")
     parser.add_argument("--num_epochs_0",       type = int,        default = 200)
     parser.add_argument("--num_epochs_1",       type = int,        default = 200)
     parser.add_argument("--milestone_0",        type = int,        default = 200)
@@ -31,11 +32,12 @@ def set_args():
     parser.add_argument("--learning_rate_0",    type = float,      default = 0.01)
     parser.add_argument("--learning_rate_1",    type = float,      default = 0.01)
     parser.add_argument("--num_heads",          type = int,        default = 1)
-    parser.add_argument("--num_iterations",     type = int,        default = 6)
+    parser.add_argument("--num_iterations",     type = int,        default = 1)
+    parser.add_argument("--k",                  type = int,        default = 10)
     parser.add_argument("--gpu",           	    type = int,        default = 0)
     parser.add_argument("--random_seed",        type = int,        default = 0)
-    parser.add_argument("--model",              type = str,        default = "Confusion_GSL_CiteSeer")
-    parser.add_argument("--description",        type = str,        default = "Confusion GSL on CiteSeer")
+    parser.add_argument("--model",              type = str,        default = "Confusion_GSL_CIFAR")
+    parser.add_argument("--description",        type = str,        default = "Confusion GSL on CIFAR")
     return parser.parse_args()
 
 def Graph_Construction(args, A, A_star):
@@ -43,14 +45,14 @@ def Graph_Construction(args, A, A_star):
     for k in range(args.num_iterations):
         A_dagger = (A_prime - A_star)
         max_probs, _ = A_dagger.max(dim = 1)
-        indicator = max_probs > 0.2
-        A_negative = F.gumbel_softmax(A_dagger * 2708, dim = 1, tau = 1, hard = True)
+        indicator = max_probs > 0.9
+        A_negative = F.gumbel_softmax(A_dagger, dim = 1, tau = 1, hard = True)
         A_negative[~indicator, :] = 0
         A_prime = ((A_prime - A_negative) > 0).float()
         A_dagger = (A_star - A_prime)
         max_probs, _ = A_dagger.max(dim = 1)
-        indicator = max_probs > 0.2
-        A_positive = F.gumbel_softmax(A_dagger * 2708, dim = 1, tau = 1, hard = True)
+        indicator = max_probs > 0.9
+        A_positive = F.gumbel_softmax(A_dagger, dim = 1, tau = 1, hard = True)
         A_positive[~indicator, :] = 0
         A_prime = (A_prime + A_positive)
     return A_prime
@@ -71,6 +73,7 @@ if __name__ == "__main__":
     print("learning_rate_1: {}".format(args.learning_rate_1))
     print("num_heads: {}".format(args.num_heads))
     print("num_iterations: {}".format(args.num_iterations))
+    print("k: {}".format(args.k))
     print("gpu: {}".format(args.gpu))
     print("random_seed: {}".format(args.random_seed))
     print("model: {}".format(args.model))
@@ -86,23 +89,23 @@ if __name__ == "__main__":
 
         ######################################################### Preparation ############################################################
 
-        dataset = Planetoid(root = os.path.join(args.source_path, args.dataset), name = args.dataset)
-        args.num_nodes = dataset[0].x.size(0)
-        args.num_train_nodes = dataset[0].train_mask.sum()
-        args.num_val_nodes = dataset[0].val_mask.sum()
-        args.num_test_nodes = dataset[0].test_mask.sum()
-        args.num_non_train_nodes = (~dataset[0].train_mask).sum()
-        args.num_features = dataset[0].x.size(1)
-        args.num_classes = 6
+        dataset = CIFAR_Graph_Dataset(args = args, root = os.path.join(args.source_path, args.dataset), train_fname = "trainfeat_all.pkl", test_fname = "testfeat_all.pkl")
+        args.num_nodes = dataset.num_nodes
+        args.num_train_nodes = dataset.train_mask.sum()
+        args.num_test_nodes = dataset.test_mask.sum()
+        args.num_non_train_nodes = (~dataset.train_mask).sum()
+        args.num_features = dataset.num_node_features
+        args.num_classes = dataset.num_classes
         print("Num Nodes: {}".format(args.num_nodes))
         print("Num Features: {}".format(args.num_features))
         print("Num Classes: {}".format(args.num_classes))
         print("Num Training Nodes: {}".format(args.num_train_nodes))
-        print("Num Validation Nodes: {}".format(args.num_val_nodes))
         print("Num Testing Nodes: {}".format(args.num_test_nodes))
         print("Num Non Training Nodes: {}".format(args.num_non_train_nodes))
+        print("Num Edges: {}".format(dataset.edge_index.size(1)))
 
-        G = dataset[0].cuda(args.gpu)
+        G = dataset.cuda(args.gpu)
+        torch.save(G, os.path.join(args.result_path, "Original_Graph.pth"))
         A = to_dense_adj(G.edge_index, max_num_nodes = G.x.size(0))[0]
         A_section_2 = A[G.train_mask, :][:, ~G.train_mask]
 
@@ -111,9 +114,10 @@ if __name__ == "__main__":
         args.model_name = "0"
         model = Confusion_GSL(args, writer).cuda(args.gpu)
         criterion = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr = args.learning_rate_0, weight_decay = 5e-4)
+        optimizer = torch.optim.Adam(model.parameters(), lr = args.learning_rate_0, weight_decay = 1e-4)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones = [args.milestone_0, args.milestone_1] , gamma = 0.1)
         A_star_section_2 = model.fit(G, criterion, optimizer, scheduler, args.num_epochs_0)
+        torch.save(Data(x = model.evaluate(G), y = G.y), os.path.join(args.result_path, "Original_Graph_Feature_Map.pth"))
         print("Max Accuracy: {}".format(model.max_accuracy))
 
         ###################################################### Training - Prime ##########################################################
@@ -128,11 +132,12 @@ if __name__ == "__main__":
             A_prime = torch.cat([A_prime_section_1_2, A_padding_section_2_3], dim = 0)
             A_prime = torch.logical_or(A_prime, A_prime.T).float()
             edge_index_prime, _ = dense_to_sparse(A + A_prime)
-            G_prime = Data(x = G.x, edge_index = edge_index_prime, y = G.y, train_mask = G.train_mask, val_mask = G.val_mask, test_mask = G.test_mask).cuda(args.gpu)
+            G_prime = Data(x = G.x, edge_index = edge_index_prime, y = G.y, train_mask = G.train_mask, test_mask = G.test_mask).cuda(args.gpu)
             criterion = nn.CrossEntropyLoss()
-            optimizer = torch.optim.Adam(model_prime.parameters(), lr = args.learning_rate_1, weight_decay = 5e-4)
+            optimizer = torch.optim.Adam(model_prime.parameters(), lr = args.learning_rate_1, weight_decay = 1e-4)
             scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones = [args.milestone_0, args.milestone_1] , gamma = 0.1)
             model_prime.fit(G_prime, criterion, optimizer, scheduler, args.num_epochs_1)
+            torch.save(Data(x = model_prime.evaluate(G_prime), y = G.y), os.path.join(args.result_path, "Modified_Graph_Feature_Map_{}.pth".format(args.model_name)))
             print("Max Accuracy: {} | {}".format(model_prime.max_accuracy, l))
             print("Num Edges: {}".format(edge_index_prime.size(1)))
 
@@ -152,6 +157,7 @@ if __name__ == "__main__":
         f.write("learning_rate_1: {}\n".format(args.learning_rate_1))
         f.write("num_heads: {}\n".format(args.num_heads))
         f.write("num_iterations: {}\n".format(args.num_iterations))
+        f.write("k: {}\n".format(args.k))
         f.write("gpu: {}\n".format(args.gpu))
         f.write("random_seed: {}\n".format(args.random_seed))
         f.write("model: {}\n".format(args.model))

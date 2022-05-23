@@ -7,13 +7,10 @@ import numpy as np
 import torch.nn as nn
 from datetime import datetime
 from torch_geometric.data import Data
-from torch_geometric.utils import subgraph
 from torch_geometric.loader import DataLoader
 from torch_geometric.datasets import Planetoid
 from torch_geometric.seed import seed_everything
-from torch.utils.data.dataset import random_split
 from torch.utils.tensorboard import SummaryWriter
-from torch_geometric.transforms import Compose, NormalizeFeatures
 
 from lib.util_loss import *
 from lib.util_dataset import *
@@ -32,7 +29,8 @@ def set_args():
     parser.add_argument("--milestone_0",        type = int,        default = 200)
     parser.add_argument("--milestone_1",        type = int,        default = 200)
     parser.add_argument("--learning_rate_0",    type = float,      default = 0.01)
-    parser.add_argument("--num_heads",          type = int,        default = 12)
+    parser.add_argument("--learning_rate_1",    type = float,      default = 0.01)
+    parser.add_argument("--num_heads",          type = int,        default = 7)
     parser.add_argument("--num_iterations",     type = int,        default = 10)
     parser.add_argument("--gpu",           	    type = int,        default = 0)
     parser.add_argument("--random_seed",        type = int,        default = 0)
@@ -66,9 +64,11 @@ if __name__ == "__main__":
     print("target_path: {}".format(args.target_path))
     print("dataset: {}".format(args.dataset))
     print("num_epochs_0: {}".format(args.num_epochs_0))
+    print("num_epochs_1: {}".format(args.num_epochs_1))
     print("milestone_0: {}".format(args.milestone_0))
     print("milestone_1: {}".format(args.milestone_1))
     print("learning_rate_0: {}".format(args.learning_rate_0))
+    print("learning_rate_1: {}".format(args.learning_rate_1))
     print("num_heads: {}".format(args.num_heads))
     print("num_iterations: {}".format(args.num_iterations))
     print("gpu: {}".format(args.gpu))
@@ -130,7 +130,7 @@ if __name__ == "__main__":
             edge_index_prime, _ = dense_to_sparse(A + A_prime)
             G_prime = Data(x = G.x, edge_index = edge_index_prime, y = G.y, train_mask = G.train_mask, val_mask = G.val_mask, test_mask = G.test_mask).cuda(args.gpu)
             criterion = nn.CrossEntropyLoss()
-            optimizer = torch.optim.Adam(model_prime.parameters(), lr = args.learning_rate_0, weight_decay = 5e-4)
+            optimizer = torch.optim.Adam(model_prime.parameters(), lr = args.learning_rate_1, weight_decay = 5e-4)
             scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones = [args.milestone_0, args.milestone_1] , gamma = 0.1)
             model_prime.fit(G_prime, criterion, optimizer, scheduler, args.num_epochs_1)
             print("Max Accuracy: {} | {}".format(model_prime.max_accuracy, l))
@@ -145,9 +145,11 @@ if __name__ == "__main__":
         f.write("target_path: {}\n".format(args.target_path))
         f.write("dataset: {}\n".format(args.dataset))
         f.write("num_epochs_0: {}\n".format(args.num_epochs_0))
+        f.write("num_epochs_1: {}\n".format(args.num_epochs_1))
         f.write("milestone_0: {}\n".format(args.milestone_0))
         f.write("milestone_1: {}\n".format(args.milestone_1))
         f.write("learning_rate_0: {}\n".format(args.learning_rate_0))
+        f.write("learning_rate_1: {}\n".format(args.learning_rate_1))
         f.write("num_heads: {}\n".format(args.num_heads))
         f.write("num_iterations: {}\n".format(args.num_iterations))
         f.write("gpu: {}\n".format(args.gpu))

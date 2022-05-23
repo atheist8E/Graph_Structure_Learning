@@ -53,6 +53,12 @@ class Confusion_GSL(nn.Module):
                 scheduler.step()
         return A_star_section_2
 
+    def evaluate(self, G):
+        with torch.no_grad():
+            self.eval()
+            outputs = self.forward(G)
+        return outputs
+
     def visualize(self, G, num_hops = 1):
         self.eval()
         outputs = self.forward(G)
